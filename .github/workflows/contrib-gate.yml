@@ -18,7 +18,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Auto-classify pipeline-only bootstrap PRs
+        id: auto
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          files=$(git diff --name-only "$BASE"..."$HEAD" || true)
+          echo "$files"
+          non_pipe=$(echo "$files" | grep -vE '^(CONTRIBUTING\.md|\.github/|scripts/fetch-main-and-rebuild\.sh)' || true)
+          if [ -z "$non_pipe" ] && [ -n "$files" ]; then
+            echo "Pipeline-only PR — treating as local-mod"
+            echo "class=local-mod" >> "$GITHUB_ENV"
+            echo "skip_template=1" >> "$GITHUB_ENV"
+          else
+            echo "skip_template=0" >> "$GITHUB_ENV"
+          fi
+
       - name: Classify from body (and labels if present)
+        if: env.skip_template != '1'
         env:
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
           BODY: ${{ github.event.pull_request.body }}
@@ -52,6 +71,7 @@ jobs:
           echo "Classification OK"
 
       - name: Require PR template sections
+        if: env.skip_template != '1'
         env:
           BODY: ${{ github.event.pull_request.body }}
         run: |
