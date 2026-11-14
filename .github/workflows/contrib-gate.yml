@@ -1,0 +1,100 @@
+name: Contributing
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  contributing:
+    name: Contributing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require classification label
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+          echo "Labels: ${LABELS:-<none>}"
+          case ",${LABELS}," in
+            *,local-mod,*|*,upstream-candidate,*)
+              echo "Classification label OK"
+              ;;
+            *)
+              echo "::error::Apply exactly one classification label: local-mod OR upstream-candidate (see CONTRIBUTING.md)"
+              exit 1
+              ;;
+          esac
+          case ",${LABELS}," in
+            *,local-mod,*upstream-candidate,*|*,upstream-candidate,*local-mod,*)
+              echo "::error::Use only one of local-mod / upstream-candidate, not both"
+              exit 1
+              ;;
+          esac
+
+      - name: Require PR template sections
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$BODY" > /tmp/pr-body.md
+          if [ ! -s /tmp/pr-body.md ]; then
+            echo "::error::PR body is empty — use .github/pull_request_template.md"
+            exit 1
+          fi
+          missing=0
+          for section in '## Classification' '## Summary' '## Test plan' '## Checklist'; do
+            if ! grep -Fq "$section" /tmp/pr-body.md; then
+              echo "::error::Missing PR section: $section"
+              missing=1
+            fi
+          done
+          if ! grep -Eq '\[[xX]\].*local-mod|\[[xX]\].*upstream-candidate' /tmp/pr-body.md; then
+            echo "::error::Tick local-mod or upstream-candidate in the Classification section"
+            missing=1
+          fi
+          exit "$missing"
+
+      - name: Upstream-candidate path isolation
+        if: contains(github.event.pull_request.labels.*.name, 'upstream-candidate')
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          files=$(git diff --name-only "$BASE"..."$HEAD" || true)
+          echo "$files"
+          bad=$(echo "$files" | grep -E \
+            -e 'pandaria_progress_gate' \
+            -e 'PandariaGate' \
+            -e 'sql/updates/.*/.*pandaria_gate' \
+            -e 'sql/updates/.*/.*random_bc_heroic' \
+            -e 'npc_reagent_bank' \
+            -e 'custom_reagent_bank' \
+            -e 'worldserver\.conf$' \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "::error::upstream-candidate PR touches local-mod paths:"
+            echo "$bad"
+            echo "Move these to a local-mod PR, or drop the upstream-candidate label."
+            exit 1
+          fi
+          echo "No local-mod path hits"
+
+      - name: Remind inherited LoA compile CI
+        run: |
+          cat <<'MSG'
+          Inherited LoA playerbots PR builds (non-draft, non-sql-only):
+            - Clang  (.github/workflows/linux_clang.yml)
+            - GCC    (.github/workflows/linux_gcc.yml)
+            - macOS / Windows workflows as configured upstream
+          Merge to main only when required checks are green (see branch protection).
+          MSG
