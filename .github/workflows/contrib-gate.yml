@@ -1,0 +1,127 @@
+name: Contributing
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  contributing:
+    name: Contributing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Auto-classify pipeline-only bootstrap PRs
+        id: auto
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          files=$(git diff --name-only "$BASE"..."$HEAD" || true)
+          echo "$files"
+          non_pipe=$(echo "$files" | grep -vE '^(CONTRIBUTING\.md|\.github/|scripts/fetch-main-and-rebuild\.sh)' || true)
+          if [ -z "$non_pipe" ] && [ -n "$files" ]; then
+            echo "Pipeline-only PR — treating as local-mod"
+            echo "class=local-mod" >> "$GITHUB_ENV"
+            echo "skip_template=1" >> "$GITHUB_ENV"
+          else
+            echo "skip_template=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Classify from body (and labels if present)
+        if: env.skip_template != '1'
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$BODY" > /tmp/pr-body.md
+          echo "Labels: ${LABELS:-<none>}"
+          body_local=0; body_up=0
+          grep -Eq '\[[xX]\].*local-mod' /tmp/pr-body.md && body_local=1 || true
+          grep -Eq '\[[xX]\].*upstream-candidate' /tmp/pr-body.md && body_up=1 || true
+          label_local=0; label_up=0
+          case ",${LABELS}," in *,local-mod,*) label_local=1 ;; esac
+          case ",${LABELS}," in *,upstream-candidate,*) label_up=1 ;; esac
+          if [ "$label_local" -eq 1 ] && [ "$label_up" -eq 1 ]; then
+            echo "::error::Use only one of local-mod / upstream-candidate labels"
+            exit 1
+          fi
+          if [ "$body_local" -eq 1 ] && [ "$body_up" -eq 1 ]; then
+            echo "::error::Tick only one classification checkbox"
+            exit 1
+          fi
+          if [ "$body_local" -eq 0 ] && [ "$body_up" -eq 0 ] && [ "$label_local" -eq 0 ] && [ "$label_up" -eq 0 ]; then
+            echo "::error::Classify as local-mod or upstream-candidate (checkbox in PR body; label optional once created)"
+            exit 1
+          fi
+          if [ "$label_up" -eq 1 ] || { [ "$label_local" -eq 0 ] && [ "$body_up" -eq 1 ]; }; then
+            echo "class=upstream-candidate" >> "$GITHUB_ENV"
+          else
+            echo "class=local-mod" >> "$GITHUB_ENV"
+          fi
+          echo "Classification OK"
+
+      - name: Require PR template sections
+        if: env.skip_template != '1'
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$BODY" > /tmp/pr-body.md
+          if [ ! -s /tmp/pr-body.md ]; then
+            echo "::error::PR body is empty — use .github/pull_request_template.md"
+            exit 1
+          fi
+          missing=0
+          for section in '## Classification' '## Summary' '## Test plan' '## Checklist'; do
+            if ! grep -Fq "$section" /tmp/pr-body.md; then
+              echo "::error::Missing PR section: $section"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Upstream-candidate path isolation
+        if: env.class == 'upstream-candidate'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          files=$(git diff --name-only "$BASE"..."$HEAD" || true)
+          echo "$files"
+          bad=$(echo "$files" | grep -E \
+            -e 'pandaria_progress_gate' \
+            -e 'PandariaGate' \
+            -e 'sql/updates/.*/.*pandaria_gate' \
+            -e 'sql/updates/.*/.*random_bc_heroic' \
+            -e 'npc_reagent_bank' \
+            -e 'custom_reagent_bank' \
+            -e 'worldserver\.conf$' \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "::error::upstream-candidate PR touches local-mod paths:"
+            echo "$bad"
+            echo "Move these to a local-mod PR, or drop the upstream-candidate label."
+            exit 1
+          fi
+          echo "No local-mod path hits"
+
+      - name: Remind inherited LoA compile CI
+        run: |
+          cat <<'MSG'
+          Inherited LoA playerbots PR builds (non-draft, non-sql-only):
+            - Clang  (.github/workflows/linux_clang.yml)
+            - GCC    (.github/workflows/linux_gcc.yml)
+            - macOS / Windows workflows as configured upstream
+          Merge to main only when required checks are green (see branch protection).
+          MSG

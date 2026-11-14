@@ -1,0 +1,9 @@
+- name: local-mod
+  color: "B60205"
+  description: Realm-only change; do not PR upstream
+- name: upstream-candidate
+  color: "0E8A16"
+  description: Suitable to contribute to community LoA/playerbots
+- name: sync
+  color: "1D76DB"
+  description: Sync from upstream playerbot/core
