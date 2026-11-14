@@ -57,7 +57,7 @@ git merge upstream/playerbot   # or rebase; resolve; PR into main
 | `upstream/` | Fixes that belong in community LoA / playerbots (e.g. low-level OOC HP regen) | **Yes** — open against `upstream` / `loa-core` after CI on our fork |
 | `sync/` | Merging community updates into `main` | N/A |
 
-Apply the GitHub label **`local-mod`** or **`upstream-candidate`** on every PR (CI enforces one of them).
+Tick **`local-mod`** or **`upstream-candidate`** in the PR template (CI enforces). Apply the matching GitHub label when those labels exist (created by the Ensure labels workflow after this pipeline lands on `main`).
 
 ### Local-mod examples (do not send upstream)
 
@@ -92,7 +92,7 @@ Draft PRs skip the compile workflows until marked ready (upstream behaviour) —
 
 ## PR checklist
 
-- [ ] Correct branch prefix / label (`local-mod` **or** `upstream-candidate`)
+- [ ] Correct branch prefix / classification (`local-mod` **or** `upstream-candidate`)
 - [ ] Description filled from the PR template
 - [ ] No secrets, account dumps, or live `worldserver.conf` with passwords
 - [ ] Local-mod PRs do not claim upstream readiness

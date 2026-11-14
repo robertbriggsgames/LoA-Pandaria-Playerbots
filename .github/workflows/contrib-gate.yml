@@ -18,27 +18,38 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Require classification label
+      - name: Classify from body (and labels if present)
         env:
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
+          printf '%s' "$BODY" > /tmp/pr-body.md
           echo "Labels: ${LABELS:-<none>}"
-          case ",${LABELS}," in
-            *,local-mod,*|*,upstream-candidate,*)
-              echo "Classification label OK"
-              ;;
-            *)
-              echo "::error::Apply exactly one classification label: local-mod OR upstream-candidate (see CONTRIBUTING.md)"
-              exit 1
-              ;;
-          esac
-          case ",${LABELS}," in
-            *,local-mod,*upstream-candidate,*|*,upstream-candidate,*local-mod,*)
-              echo "::error::Use only one of local-mod / upstream-candidate, not both"
-              exit 1
-              ;;
-          esac
+          body_local=0; body_up=0
+          grep -Eq '\[[xX]\].*local-mod' /tmp/pr-body.md && body_local=1 || true
+          grep -Eq '\[[xX]\].*upstream-candidate' /tmp/pr-body.md && body_up=1 || true
+          label_local=0; label_up=0
+          case ",${LABELS}," in *,local-mod,*) label_local=1 ;; esac
+          case ",${LABELS}," in *,upstream-candidate,*) label_up=1 ;; esac
+          if [ "$label_local" -eq 1 ] && [ "$label_up" -eq 1 ]; then
+            echo "::error::Use only one of local-mod / upstream-candidate labels"
+            exit 1
+          fi
+          if [ "$body_local" -eq 1 ] && [ "$body_up" -eq 1 ]; then
+            echo "::error::Tick only one classification checkbox"
+            exit 1
+          fi
+          if [ "$body_local" -eq 0 ] && [ "$body_up" -eq 0 ] && [ "$label_local" -eq 0 ] && [ "$label_up" -eq 0 ]; then
+            echo "::error::Classify as local-mod or upstream-candidate (checkbox in PR body; label optional once created)"
+            exit 1
+          fi
+          if [ "$label_up" -eq 1 ] || { [ "$label_local" -eq 0 ] && [ "$body_up" -eq 1 ]; }; then
+            echo "class=upstream-candidate" >> "$GITHUB_ENV"
+          else
+            echo "class=local-mod" >> "$GITHUB_ENV"
+          fi
+          echo "Classification OK"
 
       - name: Require PR template sections
         env:
@@ -57,14 +68,10 @@ jobs:
               missing=1
             fi
           done
-          if ! grep -Eq '\[[xX]\].*local-mod|\[[xX]\].*upstream-candidate' /tmp/pr-body.md; then
-            echo "::error::Tick local-mod or upstream-candidate in the Classification section"
-            missing=1
-          fi
           exit "$missing"
 
       - name: Upstream-candidate path isolation
-        if: contains(github.event.pull_request.labels.*.name, 'upstream-candidate')
+        if: env.class == 'upstream-candidate'
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
